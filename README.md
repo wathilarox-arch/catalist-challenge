@@ -43,3 +43,28 @@ npm run ledger:show -- ES2003 --slot case_material
 Run extraction before reconciliation. Both stages skip completed meetings on rerun, including meetings that yielded zero changes. `--limit` selects a prefix of meetings before completed meetings are skipped. Within a team, reconciliation follows the recorded order and requires each earlier existing meeting to be reconciled. `ledger:show` prints source turns and accepts `--max-seq 3` to review a team's history before its final meeting.
 
 `npm run ledger:check` audits saved event and ledger evidence against the indexed turns. For a reasoning model that supports the switch, `LLM_DISABLE_REASONING=true` leaves more of the completion budget for JSON. `LLM_EXTRACT_INPUT_TOKENS` optionally caps each transcript window when long requests produce truncated output. The planner accounts for the extra overlapping windows.
+
+## Scale up and generate the submission
+
+```sh
+npm run plan:calls
+npm run ingest:all
+npm run ledger:check
+npm run answer:all
+```
+
+`ingest:all` extracts and reconciles each selected meeting in sequence, starting with teams used by the official questions and brief. It accepts `--teams` and `--limit`. After a quota stop, rerun the same command. Completed stages are skipped and cached calls are reused.
+
+`answer:all` checks that the meetings needed by the submission are reconciled, answers the 25 official questions, and writes `answers.json` after validating the answer and brief citations. The TS3012 brief uses the ledger as of meeting c and checks that each evidence turn belongs to meetings a–c. Re-running the batch reuses cached model steps. For the Milestone 4 pilot, use `npm run answer:all -- --teams ES2003,TS3006`, which writes `answers.pilot.json`.
+
+## Evaluate and estimate costs
+
+```sh
+npm run eval
+npm run cost:report
+npm run cost:report -- --live-quota
+```
+
+`eval` runs the 12 independent questions in `data/gold.json` and writes `EVAL.md` with answer records, citation validity, retrieval recall, manual grades, and the worst measured failures. Run after ingestion for a ledger-backed evaluation. Use `npm run find` to verify the gold answers and enter their supporting turn IDs under `gold_evidence`. After reviewing the generated answers, enter `correct`, `partial`, or `incorrect` in `manual_grade` and record the reason in `review_notes`. Rerun with the same database and model to reuse cached steps. A quota stop saves a partial report. To preview the report structure offline, use `npm run eval -- --report-only --output EVAL.baseline.md`.
+
+`cost:report` reads local call logs and estimates the requests, tokens and runtime for 1,000 meetings. Add each logged model ID under `models` in `config/prices.json`, with `input_usd_per_million` and `output_usd_per_million`, to enable the paid-equivalent estimate. The optional quota check queries OpenRouter without using a completion request.

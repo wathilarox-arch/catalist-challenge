@@ -16,9 +16,11 @@ export function selectMeetings(db: MemoryDatabase, teams?: string[], limit?: num
     .sort((a, b) => Number(priority.has(b.team)) - Number(priority.has(a.team))).slice(0, limit);
 }
 
-export function loadMeetingTurns(db: MemoryDatabase, meetingId: string) {
+export function loadMeetingTurns(db: MemoryDatabase, meetingId: string, fromIdx = 1, toIdx = Number.MAX_SAFE_INTEGER) {
   const rowSchema = turnSchema.extend({ citable: z.literal([0, 1]).transform(Boolean) });
-  return z.array(rowSchema).parse(db.prepare("SELECT * FROM turns WHERE meeting_id = ? ORDER BY idx").all(meetingId));
+  return z.array(rowSchema).parse(db.prepare(`
+    SELECT * FROM turns WHERE meeting_id = ? AND idx BETWEEN ? AND ? ORDER BY idx
+  `).all(meetingId, fromIdx, toIdx));
 }
 
 export function isComplete(db: MemoryDatabase, meetingId: string, stage: Stage) {

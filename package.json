@@ -18,6 +18,10 @@
     "llm:smoke": "tsx scripts/llm-smoke.ts",
     "ingest:extract": "tsx scripts/ingest.ts extract",
     "ingest:reconcile": "tsx scripts/ingest.ts reconcile",
+    "ingest:all": "tsx scripts/ingest.ts all",
+    "answer:all": "tsx scripts/answer.ts",
+    "eval": "tsx scripts/eval.ts",
+    "cost:report": "tsx scripts/cost-report.ts",
     "ledger:show": "tsx scripts/ledger.ts",
     "ledger:check": "tsx scripts/check-ledger-evidence.ts"
   },

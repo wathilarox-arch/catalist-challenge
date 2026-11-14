@@ -1,0 +1,16 @@
+{
+  "questions": [
+    {"question_id":"G01","team":"ES2002","question":"Which early suggestion about the remote's button layout was brought up again during the interface design, and how did the later speaker describe it?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G02","team":"ES2003","question":"What was the early selling price target, and where did the team refer back to that target when discussing costs?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G03","team":"ES2004","question":"Who first suggested a way to make the remote easier to hold, and how was that idea represented in a later design discussion?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G04","team":"ES2006","question":"What did the team propose for the remote's shape before prototyping, and which aspect persisted in the prototype discussion?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G05","team":"ES2007","question":"What follow-up work did the team assign for researching the target users, and what evidence did a later meeting give that the work was done?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G06","team":"ES2008","question":"How did the number or grouping of proposed controls change between the early interface discussion and the later prototype review?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G07","team":"ES2009","question":"Which choice about powering the remote was discussed early, and what constraint did the team mention when returning to that choice later?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G08","team":"IS1002","question":"What user feedback was first reported in the available meetings, and which part did the team refer back to in a later design discussion?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G09","team":"IS1005","question":"How did the planned use of colour change from the early design meeting to the latest meeting available for this team?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G10","team":"TS3006","question":"What price or production budget was set early, and what did the team report about meeting it when reviewing the design?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G11","team":"TS3008","question":"Who proposed creating a mock-up or prototype, and what did a later discussion show about the work that was delivered?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""},
+    {"question_id":"G12","team":"TS3012","question":"What early scheduling commitment did the team make about the project reviews, and how did a later meeting report or revise that commitment?","gold_answer":"","gold_evidence":[],"manual_grade":null,"review_notes":""}
+  ]
+}
