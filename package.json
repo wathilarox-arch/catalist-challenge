@@ -2,7 +2,9 @@
   "name": "meeting-memory-agent",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=20.9.0" },
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,11 +12,19 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "ingest:parse": "tsx scripts/parse.ts",
-    "find": "tsx scripts/find.ts"
+    "find": "tsx scripts/find.ts",
+    "models": "tsx scripts/models.ts",
+    "plan:calls": "tsx scripts/plan-calls.ts",
+    "llm:smoke": "tsx scripts/llm-smoke.ts",
+    "ingest:extract": "tsx scripts/ingest.ts extract",
+    "ingest:reconcile": "tsx scripts/ingest.ts reconcile",
+    "ledger:show": "tsx scripts/ledger.ts",
+    "ledger:check": "tsx scripts/check-ledger-evidence.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.4.1",
     "next": "16.4.6",
+    "openai": "^6.49.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.0.0"

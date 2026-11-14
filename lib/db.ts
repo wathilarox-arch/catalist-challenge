@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS events (
   turn_ids TEXT NOT NULL,
   value_raw TEXT,
   refers_back INTEGER NOT NULL CHECK(refers_back IN (0, 1)),
-  refers_note TEXT
+  refers_note TEXT,
+  owner_speaker TEXT
 );
 CREATE INDEX IF NOT EXISTS events_by_meeting ON events(meeting_id);
 CREATE TABLE IF NOT EXISTS ledger (
@@ -61,6 +62,12 @@ CREATE TABLE IF NOT EXISTS ledger (
   FOREIGN KEY (team, meeting_seq) REFERENCES meetings(team, seq)
 );
 CREATE INDEX IF NOT EXISTS ledger_by_team ON ledger(team, meeting_seq, item_id, version);
+CREATE TABLE IF NOT EXISTS ingestion (
+  meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id),
+  stage TEXT NOT NULL CHECK(stage IN ('extract', 'reconcile')),
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (meeting_id, stage)
+);
 CREATE TABLE IF NOT EXISTS llm_cache (
   key TEXT PRIMARY KEY,
   response TEXT NOT NULL,
@@ -85,7 +92,11 @@ export function openMemory(path = memoryPath, { readonly = true } = {}): MemoryD
 }
 
 export function initializeMemory(db: MemoryDatabase) {
-  db.exec(schema);
+  db.transaction(() => {
+    db.exec(schema);
+    const columns = db.pragma("table_info(events)") as { name: string }[];
+    if (!columns.some(({ name }) => name === "owner_speaker")) db.exec("ALTER TABLE events ADD COLUMN owner_speaker TEXT");
+  }).immediate();
 }
 
 export function indexMeetings(db: MemoryDatabase, transcripts: Iterable<ParsedMeeting>): number {
@@ -180,3 +191,5 @@ export function getLedgerAsOf(db: MemoryDatabase, team: string, maxSeq: number, 
   `).all({ team, maxSeq, history: Number(history) });
   return z.array(ledgerEntrySchema).parse(rows);
 }
+
+export type LedgerEntry = ReturnType<typeof getLedgerAsOf>[number];
