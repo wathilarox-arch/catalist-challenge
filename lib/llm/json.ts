@@ -26,7 +26,7 @@ export function firstJsonObject(text: string): string {
   throw new Error("No complete JSON object found.");
 }
 
-export async function completeJson<T>(complete: Complete, request: LlmRequest, schema: z.ZodType<T>) {
+export async function completeJson<T>(complete: Complete, request: LlmRequest, schema: z.ZodType<T>, { canRepair = true } = {}) {
   const parse = (text: string): T => {
     let value: unknown;
     try {
@@ -48,6 +48,10 @@ export async function completeJson<T>(complete: Complete, request: LlmRequest, s
     return { data: parse(first.text), response: first, repaired: false };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Invalid object.";
+    if (!canRepair) {
+      first.discard?.();
+      throw new Error(`JSON validation failed with no calls left for repair (${request.purpose}): ${detail}`);
+    }
     const second = await complete({
       ...request, model: first.model, purpose: `${request.purpose}:repair`,
       messages: [...request.messages, { role: "assistant", content: first.text }, {
@@ -57,6 +61,8 @@ export async function completeJson<T>(complete: Complete, request: LlmRequest, s
     try {
       return { data: parse(second.text), response: second, repaired: true };
     } catch (repairError) {
+      first.discard?.();
+      second.discard?.();
       const detail = repairError instanceof Error ? repairError.message : "Invalid object.";
       throw new Error(`JSON validation still failed after one repair (${request.purpose}): ${detail}`);
     }

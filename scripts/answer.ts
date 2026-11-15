@@ -8,7 +8,7 @@ import { validateCitation } from "../lib/citations";
 import { citationStore, initializeMemory, openMemory } from "../lib/db";
 import { completedMeetings, selectMeetings } from "../lib/ingest";
 import { createLlmClient, DailyBudgetError } from "../lib/llm/client";
-import { loadLocalEnv, readModels } from "../lib/llm/config";
+import { loadLocalEnv, readLlmSettings, readModels } from "../lib/llm/config";
 import { teamIdSchema } from "../lib/parse";
 
 const batchSchema = z.object({ questions: z.array(questionSchema.extend({ team: teamIdSchema })) });
@@ -51,7 +51,8 @@ async function main() {
       const missing = required.filter(({ meeting_id }) => !reconciled.has(meeting_id));
       if (missing.length) throw new Error(`${missing.length} meetings needed by the submission are pending reconciliation, starting with ${missing[0].meeting_id}. Run npm run ingest:all to resume.`);
     }
-    const client = createLlmClient({ apiKey, db, fallbacks });
+    const settings = readLlmSettings();
+    const client = createLlmClient({ apiKey, db, fallbacks, settings });
     const store = citationStore(db);
     const answers: Answer[] = [];
     const uncovered = teams ? [...teams].filter((team) => !selected.some((question) => question.team === team)) : [];
@@ -62,6 +63,7 @@ async function main() {
         console.log(`${question.question_id} (${question.team}): ${await client.remainingBudget()} live requests remaining.`);
         answers.push(await answerQuestion(db, question, {
           model, complete: client.complete, pendingCalls: (selected.length - index - 1) * maxAgentCalls + (teams ? 0 : 1),
+          maxOutputTokens: settings.agentOutputTokens,
           onStep: (step) => printStep(question.question_id, step),
         }));
       } catch (error) {
@@ -72,7 +74,7 @@ async function main() {
       }
     }
 
-    const brief = teams ? undefined : await generateBrief(db, { model, complete: client.complete });
+    const brief = teams ? undefined : await generateBrief(db, { model, complete: client.complete, maxOutputTokens: settings.briefOutputTokens });
     const citations = [...answers.flatMap((answer) => answer.citations), ...(brief?.citations ?? [])];
     for (const citation of citations) {
       if (!validateCitation(citation, store)) throw new Error(`Invalid final citation in ${citation.meeting_id}.`);

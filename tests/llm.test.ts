@@ -121,10 +121,14 @@ describe("JSON completions", () => {
     expect(calls()).toMatchObject([{ purpose: "extract" }, { purpose: "extract:repair" }]);
   });
 
-  it("stops after the repair fails", async () => {
+  it("stops after the repair fails and fetches a fresh response on rerun", async () => {
     const { complete, transport } = setup(vi.fn(async () => completion("This is prose.")));
     await expect(completeJson(complete, request, schema)).rejects.toThrow("after one repair");
     expect(transport).toHaveBeenCalledTimes(2);
+    expect(db.prepare("SELECT COUNT(*) FROM llm_cache").pluck().get()).toBe(0);
+    transport.mockResolvedValueOnce(completion('{"answer":42}'));
+    await expect(completeJson(complete, request, schema)).resolves.toMatchObject({ repaired: false, data: { answer: 42 } });
+    expect(transport).toHaveBeenCalledTimes(3);
   });
 });
 

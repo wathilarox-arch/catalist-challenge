@@ -44,7 +44,7 @@ async function main() {
     const context = needsExtraction.length ? Math.min(...[model.extract!, ...models.fallbacks].map((id) => available.get(id)!)) : 0;
     const client = createLlmClient({ apiKey, db, settings, fallbacks: models.fallbacks });
     const extractCalls = new Map(needsExtraction.map(({ meeting_id }) => [meeting_id,
-      windowTurns(loadMeetingTurns(db, meeting_id), context, settings.extractInputTokens).length]));
+      windowTurns(loadMeetingTurns(db, meeting_id), context, settings.extractInputTokens, settings.extractOutputTokens).length]));
     const reconcileIds = new Set(needsReconciliation.map(({ meeting_id }) => meeting_id));
     let pending = [...extractCalls.values()].reduce((sum, count) => sum + count, needsReconciliation.length);
     console.log(`${await client.remainingBudget()} requests available for ${pending} estimated completion calls.`);
@@ -65,6 +65,7 @@ async function main() {
         for (const { meeting, stage, calls } of groups[next++]) {
           if (failure) return;
           const options = { model: model[stage]!, context, maxInputTokens: settings.extractInputTokens, complete: client.complete,
+            maxOutputTokens: stage === "extract" ? settings.extractOutputTokens : settings.reconcileOutputTokens,
             pendingCalls: Math.max(1, pending - calls + 1) };
           console.log(`${meeting.meeting_id}: ${stage} started.`);
           try {

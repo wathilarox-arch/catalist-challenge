@@ -9,7 +9,12 @@ const settingsSchema = z.object({
   concurrency: z.coerce.number().int().min(1).max(20).default(1),
   dailyBudget: z.coerce.number().int().nonnegative().optional(),
   disableReasoning: z.stringbool().optional(),
+  reasoningEffort: z.enum(["minimal", "low", "medium", "high"]).optional(),
   extractInputTokens: z.coerce.number().int().min(1024).optional(),
+  extractOutputTokens: z.coerce.number().int().min(1024).max(32768).optional(),
+  reconcileOutputTokens: z.coerce.number().int().min(1024).max(32768).optional(),
+  agentOutputTokens: z.coerce.number().int().min(1024).max(32768).optional(),
+  briefOutputTokens: z.coerce.number().int().min(1024).max(32768).optional(),
 });
 
 export function loadLocalEnv() {
@@ -22,7 +27,12 @@ export function readLlmSettings(env = process.env) {
     concurrency: optionalSetting(env.LLM_CONCURRENCY),
     dailyBudget: optionalSetting(env.DAILY_REQUEST_BUDGET),
     disableReasoning: optionalSetting(env.LLM_DISABLE_REASONING),
+    reasoningEffort: optionalSetting(env.LLM_REASONING_EFFORT),
     extractInputTokens: optionalSetting(env.LLM_EXTRACT_INPUT_TOKENS),
+    extractOutputTokens: optionalSetting(env.LLM_EXTRACT_OUTPUT_TOKENS),
+    reconcileOutputTokens: optionalSetting(env.LLM_RECONCILE_OUTPUT_TOKENS),
+    agentOutputTokens: optionalSetting(env.LLM_AGENT_OUTPUT_TOKENS),
+    briefOutputTokens: optionalSetting(env.LLM_BRIEF_OUTPUT_TOKENS),
   });
 }
 

@@ -69,7 +69,7 @@ it("keeps later meetings and other teams out of tool results and final citations
 
 it("counts JSON repairs against the six-call limit", async () => {
   const complete = scripted({ unexpected: true }, search, search, search, search, { unexpected: true });
-  await expect(answerQuestion(db, question, { model, complete })).rejects.toThrow(/6 calls before a JSON repair/);
+  await expect(answerQuestion(db, question, { model, complete })).rejects.toThrow(/no calls left for repair/);
   expect(complete).toHaveBeenCalledTimes(6);
 });
 

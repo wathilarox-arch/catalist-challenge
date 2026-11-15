@@ -30,9 +30,9 @@ const errorSchema = z.object({
 });
 
 export type LlmRequest = z.input<typeof requestSchema>;
-export type LlmResponse = z.infer<typeof responseSchema> & { model: string; cached: boolean };
+export type LlmResponse = z.infer<typeof responseSchema> & { model: string; cached: boolean; discard?: () => void };
 export type Complete = (request: LlmRequest) => Promise<LlmResponse>;
-type ChatRequest = { model: string; messages: z.infer<typeof messageSchema>[]; temperature: number; max_tokens?: number; stream: false; reasoning?: { enabled: false } };
+type ChatRequest = { model: string; messages: z.infer<typeof messageSchema>[]; temperature: number; max_tokens?: number; stream: false; reasoning?: { enabled: false } | { effort: NonNullable<Settings["reasoningEffort"]> } };
 type Transport = (request: ChatRequest) => Promise<OpenAI.Chat.Completions.ChatCompletion>;
 type Settings = ReturnType<typeof readLlmSettings>;
 
@@ -86,10 +86,13 @@ export function createLlmClient({
 }) {
   const validatedFallbacks = z.array(freeModelSchema).parse(fallbacks);
   const sdk = new OpenAI({ apiKey, baseURL: openRouterUrl, maxRetries: 0, timeout: 45_000 });
-  const send: Transport = transport ?? ((params) => sdk.chat.completions.create(params));
+  const send: Transport = transport ?? ((params) => sdk.chat.completions.create(params, {
+    timeout: Math.max(45_000, Math.ceil((params.max_tokens ?? 0) * 6)),
+  }));
   const limiter = new RequestLimiter(settings.rpm, settings.concurrency, clock);
   const cacheGet = db.prepare<[string], { response: string }>("SELECT response FROM llm_cache WHERE key = ?");
   const cachePut = db.prepare("INSERT OR REPLACE INTO llm_cache (key, response, created_at) VALUES (?, ?, ?)");
+  const cacheRemove = db.prepare("DELETE FROM llm_cache WHERE key = ? AND response = ?");
   const countToday = db.prepare<[string], { count: number }>("SELECT COUNT(*) AS count FROM llm_calls WHERE cached = 0 AND ts >= ?");
   const insertLog = db.prepare(`
     INSERT INTO llm_calls (ts, model, purpose, prompt_tokens, completion_tokens, latency_ms, cached, status)
@@ -135,7 +138,8 @@ export function createLlmClient({
     const models = [...new Set([request.model, ...validatedFallbacks])];
     const candidates = models.map((model) => {
       const params: ChatRequest = { model, messages: request.messages, temperature: request.temperature, max_tokens: request.maxTokens, stream: false,
-        ...(settings.disableReasoning ? { reasoning: { enabled: false } as const } : {}) };
+        ...(settings.disableReasoning ? { reasoning: { enabled: false } as const } :
+          settings.reasoningEffort ? { reasoning: { effort: settings.reasoningEffort } } : {}) };
       const key = createHash("sha256").update(JSON.stringify(params)).digest("hex");
       return { params, key };
     });
@@ -144,7 +148,7 @@ export function createLlmClient({
       if (!cached) continue;
       const result = responseSchema.parse(JSON.parse(cached.response));
       logCall(params.model, request.purpose, "ok", true, clock.now(), result.usage);
-      return { ...result, model: params.model, cached: true };
+      return { ...result, model: params.model, cached: true, discard: () => { cacheRemove.run(key, cached.response); } };
     }
     const inFlightKey = candidates.map(({ key }) => key).join(":");
     const existing = pending.get(inFlightKey);
@@ -193,11 +197,12 @@ export function createLlmClient({
                 if (daily) throw new DailyBudgetError(request.pendingCalls);
                 throw error;
               }
+              const serialized = JSON.stringify(result);
               db.transaction(() => {
-                cachePut.run(key, JSON.stringify(result), new Date(start).toISOString());
+                cachePut.run(key, serialized, new Date(start).toISOString());
                 finish("ok", result.usage);
               })();
-              return { ...result, model: params.model, cached: false };
+              return { ...result, model: params.model, cached: false, discard: () => { cacheRemove.run(key, serialized); } };
             });
           } catch (error) {
             if (error instanceof DailyBudgetError) throw error;

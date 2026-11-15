@@ -63,13 +63,14 @@ function detectTeam(question: Question) {
 }
 
 export async function answerQuestion(db: MemoryDatabase, input: Question, {
-  complete, model, purpose = "agent", maxSeq = 4, pendingCalls = 0, retriever = new FtsRetriever(db), onStep,
+  complete, model, purpose = "agent", maxSeq = 4, pendingCalls = 0, maxOutputTokens = 2200, retriever = new FtsRetriever(db), onStep,
 }: {
   complete: Complete;
   model: string;
   purpose?: string;
   maxSeq?: number;
   pendingCalls?: number;
+  maxOutputTokens?: number;
   retriever?: Retriever;
   onStep?: (step: AgentStep) => void;
 }): Promise<Answer> {
@@ -97,15 +98,15 @@ export async function answerQuestion(db: MemoryDatabase, input: Question, {
   while (usedCalls < maxAgentCalls) {
     const calls: Usage[] = [];
     const step = usedCalls + 1;
-    const { data: action } = await completeJson(async (request) => {
+    const { data: action, response } = await completeJson(async (request) => {
       if (usedCalls >= maxAgentCalls) throw new Error(`Agent reached ${maxAgentCalls} calls before a JSON repair.`);
       const response = await complete({ ...request, pendingCalls: pendingCalls + maxAgentCalls - usedCalls++ });
       calls.push({ model: response.model, cached: response.cached, usage: response.usage });
       return response;
     }, {
-      model, purpose, temperature: 0, maxTokens: 2200,
-      messages: [...messages, { role: "user", content: `${maxAgentCalls - usedCalls} model call(s) left, including repairs. ${usedCalls === maxAgentCalls - 1 ? "Return the final action now." : "Choose the next action."}` }],
-    }, actionSchema);
+      model, purpose, temperature: 0, maxTokens: maxOutputTokens,
+      messages: [...messages, { role: "user", content: `${maxAgentCalls - usedCalls} model call(s) left, including repairs. ${usedCalls === maxAgentCalls - 1 ? "Return the final action now. Keep the answer under 750 characters in 1–3 sentences. Cite only displayed turns and use short exact anchors or omit them." : "Choose the next action."}` }],
+    }, actionSchema, { canRepair: usedCalls < maxAgentCalls - 1 });
 
     let result: unknown;
     let turns: Turn[] = [];
@@ -161,6 +162,7 @@ export async function answerQuestion(db: MemoryDatabase, input: Question, {
         return answerSchema.parse({ question_id: question.question_id, answer: action.answer, citations });
       }
       rejectedFinals++;
+      if (usedCalls === maxAgentCalls || rejectedFinals === 3) response.discard?.();
       feedback = `Citation rejection. Choose verified turn IDs and anchors. ${errors.join("; ")}`;
     }
 

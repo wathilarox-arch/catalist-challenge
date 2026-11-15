@@ -44,6 +44,10 @@ Run extraction before reconciliation. Both stages skip completed meetings on rer
 
 `npm run ledger:check` audits saved event and ledger evidence against the indexed turns. For a reasoning model that supports the switch, `LLM_DISABLE_REASONING=true` leaves more of the completion budget for JSON. `LLM_EXTRACT_INPUT_TOKENS` optionally caps each transcript window when long requests produce truncated output. The planner accounts for the extra overlapping windows.
 
+For models that support reasoning effort, set `LLM_REASONING_EFFORT=minimal` to reserve more completion tokens for output. `LLM_DISABLE_REASONING=true` takes precedence when both are set.
+
+If a reasoning model exhausts its completion budget before returning JSON, `LLM_EXTRACT_OUTPUT_TOKENS` and `LLM_RECONCILE_OUTPUT_TOKENS` override the 8,192-token defaults. Keep these settings stable when resuming so completed requests can be replayed from cache.
+
 ## Scale up and generate the submission
 
 ```sh

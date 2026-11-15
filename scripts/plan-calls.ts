@@ -29,7 +29,7 @@ async function main() {
     const extracted = completedMeetings(db, "extract");
     const reconciled = completedMeetings(db, "reconcile");
     const extraction = meetings.filter(({ meeting_id }) => !extracted.has(meeting_id)).reduce((total, meeting) =>
-      total + windowTurns(loadMeetingTurns(db, meeting.meeting_id), context, settings.extractInputTokens).length, 0);
+      total + windowTurns(loadMeetingTurns(db, meeting.meeting_id), context, settings.extractInputTokens, settings.extractOutputTokens).length, 0);
     const reconciliation = meetings.filter(({ meeting_id }) => !reconciled.has(meeting_id)).length;
     const calls = extraction + reconciliation;
     const today = new Date().toISOString().slice(0, 10);
