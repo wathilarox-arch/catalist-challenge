@@ -38,3 +38,20 @@ export async function getFreeQuota(apiKey: string, fetcher = fetch): Promise<Fre
   if (!result.success) throw new Error("OpenRouter /key did not report the remaining free-model quota.");
   return result.data.data.free_model_daily_requests;
 }
+
+export async function getAvailableFreeQuota(apiKeys: readonly string[]) {
+  let firstQuota: FreeQuota | undefined;
+  let firstError: unknown;
+  for (const apiKey of apiKeys) {
+    try {
+      const quota = await getFreeQuota(apiKey);
+      if (quota.remaining > 0) return quota;
+      firstQuota ??= quota;
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+  if (!firstQuota) throw new Error("Set an OpenRouter API key in .env.local.");
+  return firstQuota;
+}

@@ -8,7 +8,7 @@ import { validateCitation } from "../lib/citations";
 import { citationStore, initializeMemory, openMemory } from "../lib/db";
 import { completedMeetings, selectMeetings } from "../lib/ingest";
 import { createLlmClient, DailyBudgetError } from "../lib/llm/client";
-import { loadLocalEnv, readLlmSettings, readModels } from "../lib/llm/config";
+import { loadLocalEnv, readLlmSettings, readModels, readOpenRouterKeys } from "../lib/llm/config";
 import { teamIdSchema } from "../lib/parse";
 
 const batchSchema = z.object({ questions: z.array(questionSchema.extend({ team: teamIdSchema })) });
@@ -38,8 +38,8 @@ async function main() {
   const selected = questions.filter(({ team }) => !teams || teams.has(team));
   if (!selected.length) throw new Error("No official questions match the selected teams.");
   const { agent: model, fallbacks } = readModels();
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey || !model) throw new Error("Set OPENROUTER_API_KEY and MODEL_AGENT in .env.local.");
+  const apiKeys = readOpenRouterKeys();
+  if (!apiKeys.length || !model) throw new Error("Set an OpenRouter API key and MODEL_AGENT in .env.local.");
 
   const db = openMemory(undefined, { readonly: false });
   try {
@@ -52,7 +52,7 @@ async function main() {
       if (missing.length) throw new Error(`${missing.length} meetings needed by the submission are pending reconciliation, starting with ${missing[0].meeting_id}. Run npm run ingest:all to resume.`);
     }
     const settings = readLlmSettings();
-    const client = createLlmClient({ apiKey, db, fallbacks, settings });
+    const client = createLlmClient({ apiKeys, db, fallbacks, settings });
     const store = citationStore(db);
     const answers: Answer[] = [];
     const uncovered = teams ? [...teams].filter((team) => !selected.some((question) => question.team === team)) : [];

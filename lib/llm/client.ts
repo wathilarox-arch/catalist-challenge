@@ -33,8 +33,13 @@ export type LlmRequest = z.input<typeof requestSchema>;
 export type LlmResponse = z.infer<typeof responseSchema> & { model: string; cached: boolean; discard?: () => void };
 export type Complete = (request: LlmRequest) => Promise<LlmResponse>;
 type ChatRequest = { model: string; messages: z.infer<typeof messageSchema>[]; temperature: number; max_tokens?: number; stream: false; reasoning?: { enabled: false } | { effort: NonNullable<Settings["reasoningEffort"]> } };
-type Transport = (request: ChatRequest) => Promise<OpenAI.Chat.Completions.ChatCompletion>;
+type Transport = (request: ChatRequest, apiKey: string) => Promise<OpenAI.Chat.Completions.ChatCompletion>;
 type Settings = ReturnType<typeof readLlmSettings>;
+type Credential = {
+  apiKey: string;
+  send: (request: ChatRequest, signal?: AbortSignal) => Promise<OpenAI.Chat.Completions.ChatCompletion>;
+  quota?: { day: string; read: Promise<{ remaining: number }> };
+};
 
 export class DailyBudgetError extends Error {
   constructor(readonly pendingCalls: number) {
@@ -56,6 +61,13 @@ function limitSource(error: unknown) {
   if (source && /^(?:openrouter|upstream)_[a-z0-9_]{1,70}$/.test(source)) return source;
 }
 
+function exhaustedKeyStatus(source: string | undefined, status?: number) {
+  if (source === "openrouter_free_tier_daily") return "429_daily";
+  if (source === "openrouter_key_limit" || source === "openrouter_credits" || (status === 402 && !source)) {
+    return String(status ?? 402);
+  }
+}
+
 function retryDelay(headers: Headers | undefined, now: number) {
   const retry = headers?.get("retry-after");
   if (retry) {
@@ -73,22 +85,28 @@ export function stripThinking(content: string) {
 }
 
 export function createLlmClient({
-  apiKey, db, fallbacks = [], settings = readLlmSettings(), clock = realClock,
-  quota = () => getFreeQuota(apiKey), transport,
+  apiKeys, db, fallbacks = [], settings = readLlmSettings(), clock = realClock,
+  quota = getFreeQuota, transport,
 }: {
-  apiKey: string;
+  apiKeys: readonly string[];
   db: MemoryDatabase;
   fallbacks?: readonly string[];
   settings?: Settings;
   clock?: Clock;
-  quota?: () => Promise<FreeQuota>;
+  quota?: (apiKey: string) => Promise<FreeQuota>;
   transport?: Transport;
 }) {
   const validatedFallbacks = z.array(freeModelSchema).parse(fallbacks);
-  const sdk = new OpenAI({ apiKey, baseURL: openRouterUrl, maxRetries: 0, timeout: 45_000 });
-  const send: Transport = transport ?? ((params) => sdk.chat.completions.create(params, {
-    timeout: Math.max(45_000, Math.ceil((params.max_tokens ?? 0) * 6)),
-  }));
+  const credentials: Credential[] = [...new Set(apiKeys)].map((apiKey) => {
+    const sdk = new OpenAI({ apiKey, baseURL: openRouterUrl, maxRetries: 0, timeout: 45_000 });
+    return {
+      apiKey,
+      send: (params, signal) => transport ? transport(params, apiKey) : sdk.chat.completions.create(params, {
+        timeout: Math.max(45_000, Math.ceil((params.max_tokens ?? 0) * 6)), signal,
+      }),
+    };
+  });
+  if (!credentials.length) throw new Error("Set an OpenRouter API key in .env.local.");
   const limiter = new RequestLimiter(settings.rpm, settings.concurrency, clock);
   const cacheGet = db.prepare<[string], { response: string }>("SELECT response FROM llm_cache WHERE key = ?");
   const cachePut = db.prepare("INSERT OR REPLACE INTO llm_cache (key, response, created_at) VALUES (?, ?, ?)");
@@ -101,21 +119,34 @@ export function createLlmClient({
   const finishLog = db.prepare(`
     UPDATE llm_calls SET status = ?, prompt_tokens = ?, completion_tokens = ?, latency_ms = ? WHERE id = ?
   `);
-  let dailyQuota: { day: string; remaining: number } | undefined;
-  let quotaRead: Promise<void> | undefined;
   const day = () => new Date(clock.now()).toISOString().slice(0, 10);
   const usedToday = () => countToday.get(`${day()}T00:00:00.000Z`)?.count ?? 0;
+  const localRemaining = () => settings.dailyBudget === undefined ? Infinity : settings.dailyBudget - usedToday();
 
-  async function remainingBudget() {
-    const today = day();
-    if (dailyQuota?.day !== today) {
-      quotaRead ??= quota().then(({ remaining }) => {
-        dailyQuota = { day: today, remaining };
-      }).finally(() => { quotaRead = undefined; });
-      await quotaRead;
+  async function availableCredential(signal?: AbortSignal) {
+    let quotaError: unknown;
+    for (const credential of credentials) {
+      signal?.throwIfAborted();
+      const today = day();
+      if (credential.quota?.day !== today) {
+        credential.quota = { day: today, read: quota(credential.apiKey).then(({ remaining }) => ({ remaining })) };
+      }
+      const check = credential.quota;
+      try {
+        const allowance = await check.read;
+        if (allowance.remaining > 0) return { credential, allowance, day: today };
+      } catch (error) {
+        if (credential.quota === check) credential.quota = undefined;
+        quotaError ??= error;
+      }
     }
-    const local = settings.dailyBudget === undefined ? Infinity : settings.dailyBudget - usedToday();
-    return Math.max(0, Math.min(local, dailyQuota!.remaining));
+    if (quotaError) throw quotaError;
+  }
+
+  async function remainingBudget(signal?: AbortSignal) {
+    if (localRemaining() <= 0) return 0;
+    const available = await availableCredential(signal);
+    return Math.max(0, Math.min(localRemaining(), available?.allowance.remaining ?? 0));
   }
 
   function logCall(model: string, purpose: string, status: string, cached: boolean, start: number, usage: LlmResponse["usage"]) {
@@ -124,16 +155,13 @@ export function createLlmClient({
   }
 
   const reserveAttempt = db.transaction((model: string, request: z.output<typeof requestSchema>, start: number) => {
-    if (!dailyQuota?.remaining || usedToday() >= (settings.dailyBudget ?? Infinity)) {
-      throw new DailyBudgetError(request.pendingCalls);
-    }
-    const id = logCall(model, request.purpose, "started", false, start, null);
-    dailyQuota.remaining--;
-    return id;
+    if (localRemaining() <= 0) throw new DailyBudgetError(request.pendingCalls);
+    return logCall(model, request.purpose, "started", false, start, null);
   });
 
   const pending = new Map<string, Promise<LlmResponse>>();
-  const complete: Complete = async (input) => {
+  const complete = async (input: LlmRequest, signal?: AbortSignal): Promise<LlmResponse> => {
+    signal?.throwIfAborted();
     const request = requestSchema.parse(input);
     const models = [...new Set([request.model, ...validatedFallbacks])];
     const candidates = models.map((model) => {
@@ -151,7 +179,7 @@ export function createLlmClient({
       return { ...result, model: params.model, cached: true, discard: () => { cacheRemove.run(key, cached.response); } };
     }
     const inFlightKey = candidates.map(({ key }) => key).join(":");
-    const existing = pending.get(inFlightKey);
+    const existing = signal ? undefined : pending.get(inFlightKey);
     if (existing) {
       const result = await existing;
       logCall(result.model, request.purpose, "ok", true, clock.now(), result.usage);
@@ -161,40 +189,54 @@ export function createLlmClient({
     const execute = async (): Promise<LlmResponse> => {
       let lastStatus = "unavailable";
       for (const { params, key } of candidates) {
-        for (let attempt = 0; attempt < 3; attempt++) {
+        let attempt = 0;
+        while (true) {
           try {
-            if (!await remainingBudget()) throw new DailyBudgetError(request.pendingCalls);
-            return await limiter.run(async () => {
-              if (dailyQuota?.day !== day()) await remainingBudget();
+            if (localRemaining() <= 0) throw new DailyBudgetError(request.pendingCalls);
+            const available = await availableCredential(signal);
+            if (!available) throw new DailyBudgetError(request.pendingCalls);
+            if (!available.allowance.remaining || available.day !== day()) continue;
+            const response = await limiter.run(async () => {
+              signal?.throwIfAborted();
+              if (available.day !== day() || !available.allowance.remaining) return;
+              const { credential, allowance } = available;
               const start = clock.now();
               // Every live attempt consumes quota, including failed or interrupted requests.
               const callId = reserveAttempt.immediate(params.model, request, start);
+              allowance.remaining--;
               const finish = (status: string, usage: LlmResponse["usage"]) => finishLog.run(
                 status, usage?.prompt_tokens ?? null, usage?.completion_tokens ?? null, clock.now() - start, callId,
               );
+              const exhaustKey = (status: string, usage: LlmResponse["usage"]) => {
+                allowance.remaining = 0;
+                finish(status, usage);
+              };
 
               let result: z.infer<typeof responseSchema>;
               try {
-                const reply = await send(params);
+                const reply = await credential.send(params, signal);
                 const usage = reply.usage ? usageSchema.parse(reply.usage) : null;
                 const choice = reply.choices?.[0];
                 const providerError = (choice && "error" in choice ? choice.error : undefined) ??
                   ("error" in reply ? reply.error : undefined);
-                if (limitSource({ error: providerError }) === "openrouter_free_tier_daily") {
-                  throw new DailyBudgetError(request.pendingCalls);
+                const exhausted = exhaustedKeyStatus(limitSource({ error: providerError }));
+                if (exhausted) {
+                  exhaustKey(exhausted, usage);
+                  return;
                 }
                 if (String(choice?.finish_reason) === "error" || providerError) throw new RetryableResponse("provider_error", usage);
                 const text = stripThinking(choice?.message?.content ?? "");
                 if (!text) throw new RetryableResponse("empty", usage);
                 result = { text, usage };
               } catch (error) {
-                const daily = error instanceof DailyBudgetError ||
-                  (error instanceof OpenAI.APIError && limitSource(error.error) === "openrouter_free_tier_daily");
-                if (daily) dailyQuota!.remaining = 0;
-                const status = daily ? "429_daily" : error instanceof RetryableResponse ? error.status :
+                const exhausted = error instanceof OpenAI.APIError && exhaustedKeyStatus(limitSource(error.error), error.status);
+                if (exhausted) {
+                  exhaustKey(exhausted, null);
+                  return;
+                }
+                const status = error instanceof RetryableResponse ? error.status :
                   error instanceof OpenAI.APIError && error.status ? String(error.status) : "transport_error";
                 finish(status, error instanceof RetryableResponse ? error.usage : null);
-                if (daily) throw new DailyBudgetError(request.pendingCalls);
                 throw error;
               }
               const serialized = JSON.stringify(result);
@@ -204,17 +246,19 @@ export function createLlmClient({
               })();
               return { ...result, model: params.model, cached: false, discard: () => { cacheRemove.run(key, serialized); } };
             });
+            if (response) return response;
           } catch (error) {
+            signal?.throwIfAborted();
             if (error instanceof DailyBudgetError) throw error;
             const apiError = error instanceof OpenAI.APIError ? error : undefined;
             const status = apiError?.status;
+            const source = limitSource(apiError?.error);
             const retryable = error instanceof RetryableResponse || error instanceof OpenAI.APIConnectionError ||
-              status === 429 || (status !== undefined && status >= 500);
+              status === 429 || source === "openrouter_in_flight_budget" || (status !== undefined && status >= 500);
             if (!retryable && status !== 404) {
               if (status) throw new Error(`OpenRouter completion returned HTTP ${status}. Check key and model configuration.`);
               throw error;
             }
-            const source = limitSource(apiError?.error);
             lastStatus = status ? `HTTP ${status}${source ? ` ${source}` : ""}` :
               error instanceof RetryableResponse ? error.status : "network error";
             if (!retryable || attempt === 2) break;
@@ -224,6 +268,7 @@ export function createLlmClient({
               lastStatus += `, retry after ${Math.ceil(delay / 1000)}s`;
               break;
             }
+            attempt++;
             await clock.sleep(delay);
           }
         }
@@ -232,6 +277,7 @@ export function createLlmClient({
     };
 
     const promise = execute();
+    if (signal) return promise;
     pending.set(inFlightKey, promise);
     try {
       return await promise;

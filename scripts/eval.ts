@@ -6,7 +6,7 @@ import { validateCitation } from "../lib/citations";
 import { citationStore, openMemory } from "../lib/db";
 import { completedMeetings } from "../lib/ingest";
 import { createLlmClient, DailyBudgetError } from "../lib/llm/client";
-import { loadLocalEnv, readModels } from "../lib/llm/config";
+import { loadLocalEnv, readModels, readOpenRouterKeys } from "../lib/llm/config";
 import { callSummary, percent, readCalls } from "../lib/llm/report";
 import { teamIdSchema } from "../lib/parse";
 
@@ -108,10 +108,10 @@ async function main() {
       return;
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
+    const apiKeys = readOpenRouterKeys();
     const model = models.agent;
-    if (!apiKey || !model) throw new Error("Set OPENROUTER_API_KEY and MODEL_AGENT in .env.local.");
-    const client = createLlmClient({ apiKey, db, fallbacks: models.fallbacks });
+    if (!apiKeys.length || !model) throw new Error("Set an OpenRouter API key and MODEL_AGENT in .env.local.");
+    const client = createLlmClient({ apiKeys, db, fallbacks: models.fallbacks });
     console.log(`${await client.remainingBudget()} live requests remaining. Evaluating ${results.length} questions.`);
     for (const [index, result] of results.entries()) {
       const { question, seen } = result;

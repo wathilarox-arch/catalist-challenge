@@ -4,7 +4,7 @@ import { initializeMemory, openMemory } from "../lib/db";
 import { extractMeeting, windowTurns } from "../lib/extract";
 import { completedMeetings, loadMeetingTurns, selectMeetings, type Stage } from "../lib/ingest";
 import { createLlmClient } from "../lib/llm/client";
-import { loadLocalEnv, readLlmSettings, readModels } from "../lib/llm/config";
+import { loadLocalEnv, readLlmSettings, readModels, readOpenRouterKeys } from "../lib/llm/config";
 import { getFreeModels } from "../lib/llm/openrouter";
 import { teamIdSchema, type Meeting } from "../lib/parse";
 import { reconcileMeeting } from "../lib/reconcile";
@@ -31,18 +31,18 @@ async function main() {
     console.log(`${needsExtraction.length} meetings pending extraction, ${needsReconciliation.length} pending reconciliation for this run.`);
     if (!needsExtraction.length && !needsReconciliation.length) return;
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
+    const apiKeys = readOpenRouterKeys();
     const models = readModels();
     const model = { extract: models.extract, reconcile: models.agent ?? models.extract };
     const stages = (["extract", "reconcile"] as const).filter((stage) => stage === "extract" ? needsExtraction.length : needsReconciliation.length);
-    if (!apiKey || stages.some((stage) => !model[stage])) throw new Error("Set OPENROUTER_API_KEY and the stage model in .env.local.");
+    if (!apiKeys.length || stages.some((stage) => !model[stage])) throw new Error("Set an OpenRouter API key and the stage model in .env.local.");
     const catalog = await getFreeModels();
     const available = new Map(catalog.map((entry) => [entry.id, entry.context_length]));
     const configured = [...new Set([...stages.map((stage) => model[stage]!), ...models.fallbacks])];
     const missing = configured.filter((id) => !available.get(id));
     if (missing.length) throw new Error(`Configured models unavailable: ${missing.join(", ")}. Run npm run models to select an available model.`);
     const context = needsExtraction.length ? Math.min(...[model.extract!, ...models.fallbacks].map((id) => available.get(id)!)) : 0;
-    const client = createLlmClient({ apiKey, db, settings, fallbacks: models.fallbacks });
+    const client = createLlmClient({ apiKeys, db, settings, fallbacks: models.fallbacks });
     const extractCalls = new Map(needsExtraction.map(({ meeting_id }) => [meeting_id,
       windowTurns(loadMeetingTurns(db, meeting_id), context, settings.extractInputTokens, settings.extractOutputTokens).length]));
     const reconcileIds = new Set(needsReconciliation.map(({ meeting_id }) => meeting_id));

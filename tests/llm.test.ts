@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { initializeMemory, openMemory, type MemoryDatabase } from "../lib/db";
 import { createLlmClient, DailyBudgetError, type LlmRequest } from "../lib/llm/client";
+import { readOpenRouterKeys } from "../lib/llm/config";
 import { completeJson, firstJsonObject } from "../lib/llm/json";
 import { RequestLimiter } from "../lib/llm/limiter";
 import { getFreeModels, getFreeQuota } from "../lib/llm/openrouter";
@@ -37,11 +38,19 @@ afterEach(() => db.close());
 function setup(transport = vi.fn(async () => completion('{"answer":42}')), budget = 50, dailyBudget?: number) {
   const clock = fakeClock();
   const quota = vi.fn(async () => ({ limit: 50, remaining: budget, used: 50 - budget }));
-  const options = { apiKey: "test", db, transport, clock, quota, settings: { rpm: 15, concurrency: 1, dailyBudget } };
+  const options = { apiKeys: ["test"], db, transport, clock, quota, settings: { rpm: 15, concurrency: 1, dailyBudget } };
   return { ...createLlmClient({ ...options, fallbacks: [fallback] }), transport, options, clock, quota };
 }
 
 const calls = () => db.prepare("SELECT model, purpose, status, cached, prompt_tokens, completion_tokens FROM llm_calls ORDER BY id").all();
+
+it("reads numbered keys in numerical order, skipping gaps, blanks, and duplicates", () => {
+  expect(readOpenRouterKeys({
+    OPENROUTER_API_KEY: " primary ", OPENROUTER_CONTINUATION_KEY_10: "last",
+    OPENROUTER_CONTINUATION_KEY_2: "second", OPENROUTER_CONTINUATION_KEY_1: "primary",
+    OPENROUTER_CONTINUATION_KEY_5: " ",
+  })).toEqual(["primary", "second", "last"]);
+});
 
 describe("OpenRouter client", () => {
   it("persists usage and reuses cached completions across clients at zero quota", async () => {
@@ -87,6 +96,54 @@ describe("OpenRouter client", () => {
     expect(calls()).toMatchObject([{ status: "429_daily" }]);
   });
 
+  it("uses the next key when the quota check reports that the primary is exhausted", async () => {
+    const { options } = setup();
+    const quota = vi.fn(async (key: string) => ({ limit: 50, remaining: key === "test" ? 0 : 2, used: 48 }));
+    const client = createLlmClient({ ...options, apiKeys: ["test", "backup", "later"], quota });
+    expect(await client.remainingBudget()).toBe(2);
+    await expect(client.complete(request)).resolves.toMatchObject({ model: request.model });
+    expect(quota.mock.calls).toEqual([["test"], ["backup"]]);
+    expect(options.transport).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ model: request.model }), "backup");
+  });
+
+  it.each([[429, "openrouter_free_tier_daily", "429_daily"], [402, "openrouter_key_limit", "402"]] as const)(
+    "switches keys on HTTP %i quota exhaustion and keeps the same model",
+    async (status, source, loggedStatus) => {
+      const { options } = setup();
+      const client = createLlmClient({ ...options, apiKeys: ["test", "backup"], fallbacks: [fallback] });
+      options.transport.mockRejectedValueOnce(OpenAI.APIError.generate(status, {
+        error: { message: "cap", metadata: { limit_source: source } },
+      }, undefined, new Headers()));
+      await client.complete(request);
+      await client.complete({ ...request, maxTokens: 50 });
+      expect(options.transport).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: request.model }), "test");
+      expect(options.transport).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: request.model }), "backup");
+      expect(options.transport).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: request.model }), "backup");
+      expect(calls()).toMatchObject([{ status: loggedStatus }, { status: "ok" }, { status: "ok" }]);
+    },
+  );
+
+  it("enforces the same local cap across keys", async () => {
+    const { options } = setup(undefined, 1, 2);
+    const client = createLlmClient({ ...options, apiKeys: ["test", "backup", "unneeded"] });
+    await client.complete(request);
+    await client.complete({ ...request, maxTokens: 50 });
+    await expect(client.complete({ ...request, maxTokens: 51 })).rejects.toBeInstanceOf(DailyBudgetError);
+    expect(options.quota).toHaveBeenCalledTimes(2);
+    expect(options.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it("moves concurrent requests to the backup when the primary's last slot is reserved", async () => {
+    const { options } = setup(undefined, 1);
+    const client = createLlmClient({
+      ...options, apiKeys: ["test", "backup"], settings: { ...options.settings, concurrency: 2 },
+    });
+    await Promise.all([client.complete(request), client.complete({ ...request, maxTokens: 50 })]);
+    expect(options.transport).toHaveBeenCalledTimes(2);
+    expect(options.transport).toHaveBeenNthCalledWith(1, expect.any(Object), "test");
+    expect(options.transport).toHaveBeenNthCalledWith(2, expect.any(Object), "backup");
+  });
+
   it("reserves the local budget durably and enforces it after a restart", async () => {
     const { complete, transport, options } = setup(undefined, 50, 1);
     await complete(request);
@@ -117,7 +174,7 @@ describe("JSON completions", () => {
     await expect(completeJson(complete, request, schema)).resolves.toMatchObject({ repaired: true, data: { answer: 42 } });
     expect(transport).toHaveBeenLastCalledWith(expect.objectContaining({ messages: expect.arrayContaining([
       expect.objectContaining({ role: "user", content: expect.stringContaining("answer:") }),
-    ]) }));
+    ]) }), "test");
     expect(calls()).toMatchObject([{ purpose: "extract" }, { purpose: "extract:repair" }]);
   });
 

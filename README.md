@@ -1,6 +1,6 @@
 # Meeting Memory Agent
 
-Local Next.js foundation for searching the Catalist build-test transcripts. Use Node.js 24.x to match the Vercel build and runtime. After switching Node versions, run `npm ci` to install `better-sqlite3` for the new Node ABI.
+Catalist AI is a Next.js workspace for asking questions about the AMI design meetings. Use Node.js 24.x to match the Vercel build and runtime. After switching Node versions, run `npm ci` to install `better-sqlite3` for the new Node ABI.
 
 ```sh
 npm ci
@@ -10,19 +10,19 @@ npm run find -- TS3012 design --max-seq 3 --limit 3
 npm run dev
 ```
 
-Open `http://localhost:3000` for the corpus status page. `find` accepts a team ID and keywords plus optional `--meeting`, `--max-seq`, and `--limit` filters. Results show the turn ID, timestamp, speaker letter, and original text.
+Open `http://localhost:3000` and pick a question from **Saved answers**. The app pairs all 25 official questions with the existing submission file `answers.json`. Selecting a saved question or typing its exact text uses the local answer and citations without an OpenRouter request. Expand a citation to see the source turn and its neighbours when the corpus database is available.
 
-`ingest:parse` reads `data/transcripts/` and writes `data/memory.db`. Re-running skips unchanged meetings. If a transcript changes, ingest it into a fresh database so existing evidence references stay reliable. The web app and search CLI open SQLite in read-only mode. The questions in `data/questions.json` are reserved for the later agent run.
+For a new question, configure an OpenRouter key and `MODEL_AGENT` in `.env.local`, then select a team in the composer or include its ID in the question. The page streams the agent’s search steps and shows citations with the answer. The browser displays one exchange at a time. Saved answers remain available when live questions are disabled or the request budget is exhausted.
 
-For Vercel, deploy with the checked-in `data/memory.db`. The `package.json` engine pins Node.js 24.x for compatibility with `better-sqlite3`, and Next.js includes the database and native addon in the homepage function. Ingestion runs locally.
+The web app opens `data/memory.db` read-only and keeps its answer cache and call accounting in memory. Each running instance allows five new live questions per browser session per UTC day and ten per network per hour. Saved and cached answers bypass these limits. The web process also applies `DAILY_REQUEST_BUDGET` when configured, and OpenRouter checks its own quotas. Include `answers.json` and `data/memory.db` in the deployment source. Next.js traces the database and native addon for the homepage and Ask API.
 
-The search index uses SQLite FTS5. Queries constrain matches to one team before ranking, and the original speaker-turn text is stored apart from the normalized search text. The ledger schema and as-of query are ready for the later extraction and reconciliation milestones.
+`ingest:parse` reads `data/transcripts/` and writes `data/memory.db`. Re-running skips unchanged meetings. If a transcript changes, ingest it into a fresh database so existing evidence references stay reliable. `find` accepts a team ID and keywords plus optional `--meeting`, `--max-seq`, and `--limit` filters. SQLite FTS5 restricts matches to one team and returns the original speaker turns.
 
 The transcripts are from the AMI Meeting Corpus and were reformatted by Catalist. See [corpus attribution](data/CREDITS.txt).
 
 ## OpenRouter
 
-Run `npm run models` to find available free chat models and their context limits. Put `OPENROUTER_API_KEY`, `MODEL_EXTRACT`, and `MODEL_AGENT` in `.env.local`. Set `MODEL_FALLBACKS` to a comma-separated list of other listed `:free` model IDs if you want fallback routing. `.env.example` lists the rate and budget settings.
+Run `npm run models` to find available free chat models and their context limits. Put `OPENROUTER_API_KEY`, `MODEL_EXTRACT`, and `MODEL_AGENT` in `.env.local`. Add optional `OPENROUTER_CONTINUATION_KEY_1`, `OPENROUTER_CONTINUATION_KEY_2`, and other numbered keys for quota failover. The client tries the primary key first, then tries the numbered keys in numeric order. OpenRouter's free-model quota is shared by keys on the same account. Set `MODEL_FALLBACKS` to a comma-separated list of other listed `:free` model IDs for model fallback routing. `.env.example` lists the rate and budget settings.
 
 ```sh
 npm run plan:calls
@@ -30,7 +30,7 @@ npm run plan:calls -- --teams TS3012,ES2008 --limit 6
 npm run llm:smoke
 ```
 
-The planner estimates ingestion calls and context windows against the remaining free quota. The smoke script sends a small test prompt and repeats it to verify the SQLite cache. The default rate is 15 requests per minute with one concurrent request. Each live attempt consumes one budget slot. Account-wide daily exhaustion stops the run. Transient provider errors can retry or use another configured model. `llm_calls` records attempts and cache hits with usage and status. JSON repairs are logged with the `:repair` purpose suffix.
+The planner estimates ingestion calls and context windows using the quota of the first available key. The smoke script sends a small test prompt and repeats it to verify the SQLite cache. The default rate is 15 requests per minute with one concurrent request. Each live attempt consumes one budget slot, and `DAILY_REQUEST_BUDGET` applies across all keys. The run pauses when the local cap is reached or all keys are exhausted. Transient provider errors can retry or use another configured model. `llm_calls` records attempts and cache hits with usage and status. JSON repairs are logged with the `:repair` purpose suffix.
 
 ## Extract and reconcile meetings
 

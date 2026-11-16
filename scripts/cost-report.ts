@@ -3,8 +3,8 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { openMemory } from "../lib/db";
 import { completedMeetings } from "../lib/ingest";
-import { loadLocalEnv, readLlmSettings, readModels } from "../lib/llm/config";
-import { getFreeQuota } from "../lib/llm/openrouter";
+import { loadLocalEnv, readLlmSettings, readModels, readOpenRouterKeys } from "../lib/llm/config";
+import { getAvailableFreeQuota } from "../lib/llm/openrouter";
 import { callSummary, readCalls } from "../lib/llm/report";
 
 const price = z.object({ input_usd_per_million: z.number().nonnegative(), output_usd_per_million: z.number().nonnegative() });
@@ -54,15 +54,13 @@ async function main() {
     console.log(`- ${number(requests)} live attempts using the observed retry and repair overhead.`);
     console.log(`- About ${number(Math.max(pacingMinutes, computeMinutes))} minutes of active wall-clock time at ${settings.rpm} RPM and concurrency ${settings.concurrency}. The estimate takes the larger of pacing (${number(pacingMinutes)} min) and observed latency divided by concurrency (${number(computeMinutes)} min). Quota resets and retry waits add time.`);
     if (values["live-quota"]) {
-      const apiKey = process.env.OPENROUTER_API_KEY;
-      if (!apiKey) throw new Error("Set OPENROUTER_API_KEY to look up live quota.");
-      const quota = await getFreeQuota(apiKey);
+      const quota = await getAvailableFreeQuota(readOpenRouterKeys());
       const cap = Math.min(quota.limit, settings.dailyBudget ?? Infinity);
       const localUsed = db.prepare<[string], number>("SELECT COUNT(*) FROM llm_calls WHERE cached = 0 AND ts >= ?").pluck()
         .get(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`) ?? 0;
       const remaining = Math.min(quota.remaining, Math.max(0, (settings.dailyBudget ?? Infinity) - localUsed));
       const days = cap ? 1 + Math.ceil(Math.max(0, requests - remaining) / cap) : Infinity;
-      console.log(`- Live quota: ${remaining} requests remaining under the ${cap}/day effective cap. ${Number.isFinite(days) ? `${days} UTC quota day(s) including today.` : "Daily cap prevents live calls."}`);
+      console.log(`- Live quota for one key: ${remaining} requests remaining under the ${cap}/day effective cap. ${Number.isFinite(days) ? `${days} UTC quota day(s) including today.` : "Daily cap prevents live calls."}`);
     } else {
       console.log(`- At the plan's example quotas of 50 and 1,000 requests/day, this takes ${Math.ceil(requests / 50)} and ${Math.ceil(requests / 1000)} full quota days respectively. Use --live-quota for the account's current limit.`);
     }

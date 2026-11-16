@@ -21,6 +21,15 @@ export function loadLocalEnv() {
   if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 }
 
+export function readOpenRouterKeys(env: Readonly<Record<string, string | undefined>> = process.env) {
+  const continuationNames = Object.keys(env)
+    .filter((name) => /^OPENROUTER_CONTINUATION_KEY_\d+$/.test(name))
+    .sort((a, b) => Number(a.slice(a.lastIndexOf("_") + 1)) - Number(b.slice(b.lastIndexOf("_") + 1)));
+  const keys = ["OPENROUTER_API_KEY", ...continuationNames]
+    .flatMap((name) => optionalSetting(env[name]) ?? []);
+  return [...new Set(keys)];
+}
+
 export function readLlmSettings(env = process.env) {
   return settingsSchema.parse({
     rpm: optionalSetting(env.LLM_RPM),
