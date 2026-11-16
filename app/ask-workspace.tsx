@@ -267,7 +267,10 @@ export function AskWorkspace({ questions, teams, liveNotice }: { questions: Save
           </button>
         </div>
         <nav className="masthead-nav" aria-label="Workspace">
-          <button type="button" onClick={() => input.current?.focus()}>Ask</button>
+          <button type="button" onClick={() => {
+            if (exchange?.source === "saved") newQuestion();
+            else input.current?.focus();
+          }}>Ask</button>
           <button type="button" onClick={showBrowser}>Saved answers</button>
         </nav>
         <button type="button" className="yellow-button" onClick={newQuestion}><Icon name="new" />New question</button>
