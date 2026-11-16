@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { matchSavedQuestion, maxQuestionLength, normalizeQuestion, type AskAnswer, type AskEvent, type SavedQuestion } from "../lib/ask";
 
 const icons = {
@@ -10,7 +10,9 @@ const icons = {
   copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>,
   close: <path d="m6 6 12 12M6 18 18 6" />,
   chevron: <path d="m6 9 6 6 6-6" />,
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>,
 };
+const mobileViewport = "(max-width: 800px)";
 
 function Icon({ name }: { name: keyof typeof icons }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{icons[name]}</svg>;
@@ -144,20 +146,34 @@ export function AskWorkspace({ questions, teams, liveNotice }: { questions: Save
   const [draft, setDraft] = useState("");
   const [team, setTeam] = useState("");
   const [filter, setFilter] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [exchange, setExchange] = useState<Exchange>();
   const [copyStatus, setCopyStatus] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const drawer = useRef<HTMLDialogElement>(null);
-  const desktopSearch = useRef<HTMLDivElement>(null);
+  const desktopSidebar = useRef<HTMLElement>(null);
   const result = useRef<HTMLElement>(null);
   const scrollArea = useRef<HTMLDivElement>(null);
   const active = useRef<AbortController | null>(null);
   const search = normalizeQuestion(filter);
   const matches = questions.filter(({ id, team, question }) => normalizeQuestion(`${id} ${team} ${question}`).includes(search));
 
+  useEffect(() => {
+    const viewport = window.matchMedia(mobileViewport);
+    const closeMobileDrawer = () => {
+      if (!viewport.matches) drawer.current?.close();
+    };
+    viewport.addEventListener("change", closeMobileDrawer);
+    return () => viewport.removeEventListener("change", closeMobileDrawer);
+  }, []);
+
   function showBrowser() {
-    if (window.matchMedia("(max-width: 800px)").matches) drawer.current?.showModal();
-    else desktopSearch.current?.querySelector("input")?.focus();
+    if (window.matchMedia(mobileViewport).matches) {
+      drawer.current?.showModal();
+      return;
+    }
+    setSidebarOpen(true);
+    requestAnimationFrame(() => desktopSidebar.current?.querySelector("input")?.focus());
   }
 
   function newQuestion() {
@@ -240,7 +256,16 @@ export function AskWorkspace({ questions, teams, liveNotice }: { questions: Save
   return (
     <div className="catalist-app">
       <header className="masthead">
-        <a className="brand-logo" href="/" aria-label="Catalist AI home"><span>CATA</span><span>LIST</span></a>
+        <div className="masthead-start">
+          <a className="brand-logo" href="/" aria-label="Catalist AI home">
+            <span className="brand-wordmark" aria-hidden="true">CATA<br />LIST</span>
+          </a>
+          <button type="button" className="icon-button sidebar-toggle" aria-controls="desktop-saved-answers"
+            aria-expanded={sidebarOpen} aria-label={sidebarOpen ? "Collapse saved answers sidebar" : "Expand saved answers sidebar"}
+            title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} onClick={() => setSidebarOpen((open) => !open)}>
+            <Icon name="sidebar" />
+          </button>
+        </div>
         <nav className="masthead-nav" aria-label="Workspace">
           <button type="button" onClick={() => input.current?.focus()}>Ask</button>
           <button type="button" onClick={showBrowser}>Saved answers</button>
@@ -248,7 +273,7 @@ export function AskWorkspace({ questions, teams, liveNotice }: { questions: Save
         <button type="button" className="yellow-button" onClick={newQuestion}><Icon name="new" />New question</button>
       </header>
       <div className="workspace">
-        <aside className="sidebar desktop-sidebar" aria-label="Saved answers" ref={desktopSearch}>
+        <aside id="desktop-saved-answers" className="sidebar desktop-sidebar" aria-label="Saved answers" hidden={!sidebarOpen} ref={desktopSidebar}>
           <QuestionBrowser {...browserProps} />
         </aside>
         <dialog className="mobile-drawer" ref={drawer} aria-label="Saved answers" onClick={(event) => {
