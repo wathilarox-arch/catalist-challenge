@@ -318,7 +318,7 @@ export function AskWorkspace({ questions, teams, liveNotice }: { questions: Save
                 <button type="submit" className="send-button" aria-label="Ask question" disabled={!draft.trim() || exchange?.pending}><Icon name="send" /></button>
               </div>
             </form>
-            <p className="composer-note">{liveNotice ?? "Live questions use one team. Select a team or include its ID in your question."}</p>
+            {liveNotice && <p className="composer-note">{liveNotice}</p>}
           </div>
         </main>
       </div>
